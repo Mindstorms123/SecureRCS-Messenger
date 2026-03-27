@@ -25,3 +25,19 @@ Die Demo:
 - sendet eine Matrix-Nachricht über die eingerichteten Bridges und protokolliert alles lokal.
 
 Die komplette Historie (Inbox/Outbox/Audit) wird am Ende der Demo ausgegeben und verbleibt ausschließlich auf dem lokalen System.
+
+## Android-App (Android Studio)
+
+Zusätzlich zur Python-Demo liegt nun ein komplettes Android-Studio-Projekt bei (`app`‑Modul, Jetpack Compose UI). Die App arbeitet rein lokal, zeigt alle Risiken an, erzwingt deren Bestätigung und erlaubt das Senden/Bridgen von Nachrichten zwischen Matrix, RCS und WhatsApp (lokale Simulation ohne Netzwerkzugriff).
+
+### Öffnen und Bauen
+
+1. Projektordner in Android Studio öffnen.
+2. Android SDK 34 installieren/auswählen.
+3. Sync ausführen und danach `app` auf ein Gerät oder Emulator deployen (`Run > Run 'app'`).
+
+### Hinweise
+
+- Mindest-SDK: 24, Ziel-SDK: 34.
+- Compose-Material3 Oberfläche, keine externen Netzwerk- oder Backend-Abhängigkeiten.
+- Lokal gespeicherte Historie (Inbox/Outbox) und Audit-Log sind nur pro App-Sitzung im Speicher vorhanden und verlassen das Gerät nicht.

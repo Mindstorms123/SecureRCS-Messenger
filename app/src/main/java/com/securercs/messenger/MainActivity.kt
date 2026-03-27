@@ -300,6 +300,7 @@ fun SendMessageCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ServiceSelector(
     services: List<String>,
@@ -319,6 +320,7 @@ fun ServiceSelector(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryCard(title: String, messages: List<StoredMessage>) {
     Card(modifier = Modifier.fillMaxWidth()) {

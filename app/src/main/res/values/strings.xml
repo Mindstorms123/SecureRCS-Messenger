@@ -1,3 +1,12 @@
 <resources>
     <string name="app_name">SecureRCS Messenger</string>
+    <string name="title_matrix_first">Matrix-fokussierter Messenger</string>
+    <string name="subtitle_modern_dark">Dunkles, minimalistisches Interface mit klaren Listen für Kontakte und Chats.</string>
+    <string name="label_contacts">Kontakte</string>
+    <string name="contacts_empty">Noch keine Kontakte.</string>
+    <string name="label_recent_chats">Letzte Chats</string>
+    <string name="recent_chats_empty">Noch keine Chats vorhanden.</string>
+    <string name="chat_meta">%1$s · %2$s · %3$s</string>
+    <string name="screen_message_list_desc">Übersicht der Messenger-Abschnitte</string>
+    <string name="contacts_scroll_hint">Liste der Kontakte, horizontal scrollbar</string>
 </resources>

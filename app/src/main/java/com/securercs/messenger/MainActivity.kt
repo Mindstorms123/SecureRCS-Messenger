@@ -1,9 +1,11 @@
 package com.securercs.messenger
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -28,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -39,11 +43,17 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.focus.focusable
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.securercs.messenger.R
+import com.securercs.messenger.core.HistorySnapshot
 import com.securercs.messenger.core.LocalStore
 import com.securercs.messenger.core.MatrixConnector
 import com.securercs.messenger.core.MessengerService
@@ -55,6 +65,9 @@ import com.securercs.messenger.core.StoredMessage
 import com.securercs.messenger.core.ThirdPartyConnector
 import com.securercs.messenger.ui.theme.SecureRCSMessengerTheme
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
     private val messengerViewModel: MessengerViewModel by viewModels { MessengerViewModel.factory() }
@@ -77,7 +90,34 @@ data class UiState(
     val services: List<String> = emptyList(),
     val status: String? = null,
     val pendingRisk: RiskAcknowledgmentRequired? = null,
+    val contacts: List<Contact> = emptyList(),
+    val recentChats: List<ChatPreview> = emptyList(),
 )
+
+data class Contact(
+    val name: String,
+    val handle: String,
+    val service: String,
+)
+
+data class ChatPreview(
+    val title: String,
+    val content: String,
+    val via: String,
+    val protocol: String,
+    val timestamp: String,
+)
+
+private const val MAX_RECENT_CHATS = 10
+
+private val DEFAULT_CONTACTS = listOf(
+    Contact(name = "Matrix Space", handle = "@matrix:home", service = "matrix"),
+    Contact(name = "RCS Bridge", handle = "+49 151 000000", service = "rcs"),
+    Contact(name = "WhatsApp Bridge", handle = "+49 170 000000", service = "whatsapp"),
+)
+
+private val CHAT_TIME_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
 
 class MessengerViewModel(
     private val messenger: MessengerService,
@@ -124,15 +164,65 @@ class MessengerViewModel(
         pendingRisk: RiskAcknowledgmentRequired? = null,
     ): UiState {
         val history = messenger.history()
+        val services = messenger.services()
         return UiState(
             pendingWarnings = messenger.pendingWarnings(),
             outbox = history.outbox,
             inbox = history.inbox,
             audit = history.audit,
-            services = messenger.services(),
+            services = services,
             status = status,
             pendingRisk = pendingRisk,
+            contacts = buildContacts(history, services),
+            recentChats = buildRecentChats(history),
         )
+    }
+
+    private fun buildContacts(history: HistorySnapshot, services: List<String>): List<Contact> {
+        val derived = sequenceOf(history.outbox.asSequence(), history.inbox.asSequence()).flatten().flatMap {
+            val senderHandle = it.sender.trim()
+            val recipientHandle = it.recipient.trim()
+            listOf(
+                Contact(name = resolveDisplayName(it.sender), handle = senderHandle, service = it.protocol),
+                Contact(name = resolveDisplayName(it.recipient), handle = recipientHandle, service = it.protocol),
+            )
+        }.toList()
+        val defaults = DEFAULT_CONTACTS.filter { default -> default.service in services }
+        return (derived + defaults)
+            .distinctBy { it.handle.trim() to it.service }
+            .sortedBy { it.name.lowercase() }
+    }
+
+    private fun resolveDisplayName(raw: String): String {
+        val trimmed = raw.trim()
+        val base = trimmed.substringBefore("@").substringBefore(":").ifBlank { trimmed }
+        return base.ifBlank { trimmed }
+    }
+
+    private fun buildRecentChats(history: HistorySnapshot): List<ChatPreview> {
+        val fallbackInstant = Instant.now()
+        return sequenceOf(history.outbox.asSequence(), history.inbox.asSequence())
+            .flatten()
+            .map { msg ->
+                val parsedInstantResult = runCatching { Instant.parse(msg.timestamp) }
+                val parsedInstant = parsedInstantResult.getOrElse {
+                    Log.w("SecureRCS", "Could not parse timestamp: ${msg.timestamp}")
+                    fallbackInstant
+                }
+                val displayTime = runCatching { CHAT_TIME_FORMATTER.format(parsedInstant) }.getOrElse { msg.timestamp }
+                Triple(msg, parsedInstant, displayTime)
+            }
+            .sortedByDescending { it.second }
+            .take(MAX_RECENT_CHATS)
+            .map { (msg, _, displayTime) ->
+                ChatPreview(
+                    title = "${msg.sender} ↔ ${msg.recipient}",
+                    content = msg.content,
+                    via = msg.via,
+                    protocol = msg.protocol,
+                    timestamp = displayTime,
+                )
+            }
     }
 
     companion object {
@@ -145,6 +235,9 @@ class MessengerViewModel(
                     addConnector(MatrixConnector(store))
                     addConnector(RCSConnector(store))
                     addConnector(ThirdPartyConnector("whatsapp", store))
+                    // Use Matrix as the hub: connectors bridge into Matrix, and Matrix fans out to the others (directional to avoid loops).
+                    connectServices("rcs", listOf("matrix"))
+                    connectServices("whatsapp", listOf("matrix"))
                     connectServices("matrix", listOf("rcs", "whatsapp"))
                 }
                 return MessengerViewModel(service) as T
@@ -169,24 +262,43 @@ fun MessengerScreen(viewModel: MessengerViewModel = viewModel(factory = Messenge
     }
 
     Scaffold(
+        modifier = Modifier.semantics { contentDescription = stringResource(R.string.screen_message_list_desc) },
         topBar = { TopAppBar(title = { Text("SecureRCS Messenger") }) },
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
     ) { padding ->
-        Column(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            PendingWarningsCard(pending = uiState.pendingWarnings, onAcknowledge = viewModel::acknowledgeAndRetry)
-            SendMessageCard(
-                services = uiState.services,
-                onSend = viewModel::sendMessage,
-            )
-            HistoryCard(title = "Outbox", messages = uiState.outbox)
-            HistoryCard(title = "Inbox", messages = uiState.inbox)
-            AuditCard(entries = uiState.audit)
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = stringResource(R.string.title_matrix_first),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = stringResource(R.string.subtitle_modern_dark),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            item { ContactsCard(contacts = uiState.contacts) }
+            item { RecentChatsCard(chats = uiState.recentChats) }
+            item { PendingWarningsCard(pending = uiState.pendingWarnings, onAcknowledge = viewModel::acknowledgeAndRetry) }
+            item {
+                SendMessageCard(
+                    services = uiState.services,
+                    onSend = viewModel::sendMessage,
+                )
+            }
+            item { HistoryCard(title = "Outbox", messages = uiState.outbox) }
+            item { HistoryCard(title = "Inbox", messages = uiState.inbox) }
+            item { AuditCard(entries = uiState.audit) }
         }
     }
 
@@ -200,13 +312,83 @@ fun MessengerScreen(viewModel: MessengerViewModel = viewModel(factory = Messenge
 }
 
 @Composable
+fun ContactsCard(contacts: List<Contact>) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.label_contacts), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            if (contacts.isEmpty()) {
+                Text(stringResource(R.string.contacts_empty))
+            } else {
+                Row(
+                    modifier = Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .semantics { contentDescription = stringResource(R.string.contacts_scroll_hint) },
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    contacts.forEach { contact ->
+                        ContactCard(contact)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ContactCard(contact: Contact) {
+    Card(
+        modifier = Modifier
+            .semantics { contentDescription = "${contact.name} (${contact.handle})" },
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(contact.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+            Text(contact.handle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(contact.service.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+@Composable
+fun RecentChatsCard(chats: List<ChatPreview>) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.label_recent_chats), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            if (chats.isEmpty()) {
+                Text(stringResource(R.string.recent_chats_empty))
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    chats.forEachIndexed { index, chat ->
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(chat.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                            Text(chat.content, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                stringResource(R.string.chat_meta, chat.protocol.uppercase(), chat.via, chat.timestamp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (index != chats.lastIndex) {
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun PendingWarningsCard(
     pending: Map<String, String>,
     onAcknowledge: (String) -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Risiken bestätigen", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -232,7 +414,7 @@ fun WarningRow(service: String, warning: String, onAcknowledge: (String) -> Unit
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Button(onClick = { onAcknowledge(service) }) { Text("Risiko akzeptieren") }
-            Text("Pflicht vor Nutzung", style = MaterialTheme.typography.bodySmall)
+            Text("Pflicht vor Nutzung", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

@@ -47,7 +47,7 @@ class LocalStore:
             "content": message.content,
             "protocol": message.protocol,
             "via": via,
-            "timestamp": message.timestamp.replace(tzinfo=timezone.utc).isoformat(),
+            "timestamp": message.timestamp.isoformat(),
         }
 
     def record_outgoing(self, message: Message, via: str) -> None:
@@ -165,11 +165,25 @@ class MessengerService:
             raise KeyError(f"No connector registered for {service}")
         return self.connectors[norm]
 
-    def send_message(self, service: str, sender: str, recipient: str, content: str) -> None:
+    def send_message(
+        self,
+        service: str,
+        sender: str,
+        recipient: str,
+        content: str,
+        *,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
         norm = self._normalize(service)
         self._ensure_acknowledged(norm)
         connector = self._get_connector(norm)
-        message = Message(sender=sender, recipient=recipient, content=content, protocol=connector.protocol)
+        message = Message(
+            sender=sender,
+            recipient=recipient,
+            content=content,
+            protocol=connector.protocol,
+            timestamp=timestamp or datetime.now(timezone.utc),
+        )
         connector.send(message)
         for target in self.bridges.get(norm, []):
             if target not in self.connectors:

@@ -115,6 +115,10 @@ private val DEFAULT_CONTACTS = listOf(
     Contact(name = "Matrix Space", handle = "@matrix:home", service = "matrix"),
     Contact(name = "RCS Bridge", handle = "+49 151 000000", service = "rcs"),
     Contact(name = "WhatsApp Bridge", handle = "+49 170 000000", service = "whatsapp"),
+    Contact(name = "Mail Gateway", handle = "user@example.org", service = "email"),
+    Contact(name = "Discord Bridge", handle = "discord#0001", service = "discord"),
+    Contact(name = "Slack Workspace", handle = "workspace#general", service = "slack"),
+    Contact(name = "Telegram Bridge", handle = "@telegramUser", service = "telegram"),
 )
 
 private val CHAT_TIME_FORMATTER: DateTimeFormatter =
@@ -237,10 +241,18 @@ class MessengerViewModel(
                     addConnector(MatrixConnector(store))
                     addConnector(RCSConnector(store))
                     addConnector(ThirdPartyConnector("whatsapp", store))
+                    addConnector(ThirdPartyConnector("email", store))
+                    addConnector(ThirdPartyConnector("discord", store))
+                    addConnector(ThirdPartyConnector("slack", store))
+                    addConnector(ThirdPartyConnector("telegram", store))
                     // Use Matrix as the hub: connectors bridge into Matrix, and Matrix fans out to the others (directional to avoid loops).
                     connectServices("rcs", listOf("matrix"))
                     connectServices("whatsapp", listOf("matrix"))
-                    connectServices("matrix", listOf("rcs", "whatsapp"))
+                    connectServices("email", listOf("matrix"))
+                    connectServices("discord", listOf("matrix"))
+                    connectServices("slack", listOf("matrix"))
+                    connectServices("telegram", listOf("matrix"))
+                    connectServices("matrix", listOf("rcs", "whatsapp", "email", "discord", "slack", "telegram"))
                 }
                 return MessengerViewModel(service) as T
             }

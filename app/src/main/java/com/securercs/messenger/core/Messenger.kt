@@ -92,6 +92,10 @@ class RiskRegistry(customRisks: Map<String, String>? = null) {
             "matrix federation" to "Federated homeservers can observe metadata; trust only servers you control.",
             "whatsapp" to "Proprietary network; metadata and backups may be accessible to the provider.",
             "facebook messenger" to "Proprietary network; metadata can be profiled.",
+            "email" to "Email transport is typically only hop-to-hop encrypted; providers can read content.",
+            "discord" to "Discord stores messages server-side; there is no end-to-end encryption.",
+            "slack" to "Slack workspaces are processed server-side; workspace owners may access content.",
+            "telegram" to "Regular Telegram chats lack end-to-end encryption; metadata is held by the provider.",
         )
     }
 }

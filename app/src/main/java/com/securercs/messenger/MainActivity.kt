@@ -1,9 +1,11 @@
 package com.securercs.messenger
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,8 +13,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -41,11 +43,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.focus.focusable
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.securercs.messenger.R
 import com.securercs.messenger.core.HistorySnapshot
 import com.securercs.messenger.core.LocalStore
 import com.securercs.messenger.core.MatrixConnector
@@ -100,6 +107,17 @@ data class ChatPreview(
     val protocol: String,
     val timestamp: String,
 )
+
+private const val MAX_RECENT_CHATS = 10
+
+private val DEFAULT_CONTACTS = listOf(
+    Contact(name = "Matrix Space", handle = "@matrix:home", service = "matrix"),
+    Contact(name = "RCS Bridge", handle = "+49 151 000000", service = "rcs"),
+    Contact(name = "WhatsApp Bridge", handle = "+49 170 000000", service = "whatsapp"),
+)
+
+private val CHAT_TIME_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
 
 class MessengerViewModel(
     private val messenger: MessengerService,
@@ -161,34 +179,48 @@ class MessengerViewModel(
     }
 
     private fun buildContacts(history: HistorySnapshot, services: List<String>): List<Contact> {
-        val derived = (history.outbox + history.inbox).flatMap {
+        val derived = sequenceOf(history.outbox.asSequence(), history.inbox.asSequence()).flatten().flatMap {
+            val senderHandle = it.sender.trim()
+            val recipientHandle = it.recipient.trim()
             listOf(
-                Contact(name = it.sender, handle = it.sender, service = it.protocol),
-                Contact(name = it.recipient, handle = it.recipient, service = it.protocol),
+                Contact(name = resolveDisplayName(it.sender), handle = senderHandle, service = it.protocol),
+                Contact(name = resolveDisplayName(it.recipient), handle = recipientHandle, service = it.protocol),
             )
-        }
-        val defaults = listOf(
-            Contact(name = "Matrix Space", handle = "@matrix:home", service = "matrix"),
-            Contact(name = "RCS Bridge", handle = "+49 151 000000", service = "rcs"),
-            Contact(name = "WhatsApp Bridge", handle = "+49 170 000000", service = "whatsapp"),
-        ).filter { default -> default.service in services }
+        }.toList()
+        val defaults = DEFAULT_CONTACTS.filter { default -> default.service in services }
         return (derived + defaults)
-            .distinctBy { it.handle.lowercase() }
+            .distinctBy { it.handle.trim() to it.service }
             .sortedBy { it.name.lowercase() }
     }
 
+    private fun resolveDisplayName(raw: String): String {
+        val trimmed = raw.trim()
+        val base = trimmed.substringBefore("@").substringBefore(":").ifBlank { trimmed }
+        return base.ifBlank { trimmed }
+    }
+
     private fun buildRecentChats(history: HistorySnapshot): List<ChatPreview> {
-        val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
-        return (history.outbox + history.inbox)
-            .sortedByDescending { runCatching { Instant.parse(it.timestamp) }.getOrDefault(Instant.EPOCH) }
+        val fallbackInstant = Instant.now()
+        return sequenceOf(history.outbox.asSequence(), history.inbox.asSequence())
+            .flatten()
             .map { msg ->
+                val parsedInstantResult = runCatching { Instant.parse(msg.timestamp) }
+                val parsedInstant = parsedInstantResult.getOrElse {
+                    Log.w("SecureRCS", "Could not parse timestamp: ${msg.timestamp}")
+                    fallbackInstant
+                }
+                val displayTime = runCatching { CHAT_TIME_FORMATTER.format(parsedInstant) }.getOrElse { msg.timestamp }
+                Triple(msg, parsedInstant, displayTime)
+            }
+            .sortedByDescending { it.second }
+            .take(MAX_RECENT_CHATS)
+            .map { (msg, _, displayTime) ->
                 ChatPreview(
                     title = "${msg.sender} ↔ ${msg.recipient}",
                     content = msg.content,
                     via = msg.via,
                     protocol = msg.protocol,
-                    timestamp = runCatching { formatter.format(Instant.parse(msg.timestamp)) }
-                        .getOrElse { msg.timestamp },
+                    timestamp = displayTime,
                 )
             }
     }
@@ -203,6 +235,7 @@ class MessengerViewModel(
                     addConnector(MatrixConnector(store))
                     addConnector(RCSConnector(store))
                     addConnector(ThirdPartyConnector("whatsapp", store))
+                    // Use Matrix as the hub: connectors bridge into Matrix, and Matrix fans out to the others (directional to avoid loops).
                     connectServices("rcs", listOf("matrix"))
                     connectServices("whatsapp", listOf("matrix"))
                     connectServices("matrix", listOf("rcs", "whatsapp"))
@@ -229,6 +262,7 @@ fun MessengerScreen(viewModel: MessengerViewModel = viewModel(factory = Messenge
     }
 
     Scaffold(
+        modifier = Modifier.semantics { contentDescription = stringResource(R.string.screen_message_list_desc) },
         topBar = { TopAppBar(title = { Text("SecureRCS Messenger") }) },
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
     ) { padding ->
@@ -240,16 +274,18 @@ fun MessengerScreen(viewModel: MessengerViewModel = viewModel(factory = Messenge
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item {
-                Text(
-                    text = "Matrix-first Messenger",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    text = "Dunkles, minimalistisches Interface mit klaren Listen für Kontakte und Chats.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = stringResource(R.string.title_matrix_first),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = stringResource(R.string.subtitle_modern_dark),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             item { ContactsCard(contacts = uiState.contacts) }
             item { RecentChatsCard(chats = uiState.recentChats) }
@@ -282,12 +318,17 @@ fun ContactsCard(contacts: List<Contact>) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Kontakte", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.label_contacts), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             if (contacts.isEmpty()) {
-                Text("Noch keine Kontakte.")
+                Text(stringResource(R.string.contacts_empty))
             } else {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(contacts) { contact ->
+                Row(
+                    modifier = Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .semantics { contentDescription = stringResource(R.string.contacts_scroll_hint) },
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    contacts.forEach { contact ->
                         ContactCard(contact)
                     }
                 }
@@ -299,6 +340,8 @@ fun ContactsCard(contacts: List<Contact>) {
 @Composable
 fun ContactCard(contact: Contact) {
     Card(
+        modifier = Modifier
+            .semantics { contentDescription = "${contact.name} (${contact.handle})" },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -313,18 +356,22 @@ fun ContactCard(contact: Contact) {
 fun RecentChatsCard(chats: List<ChatPreview>) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Letzte Chats", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.label_recent_chats), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             if (chats.isEmpty()) {
-                Text("Noch keine Chats vorhanden.")
+                Text(stringResource(R.string.recent_chats_empty))
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    chats.take(10).forEachIndexed { index, chat ->
+                    chats.forEachIndexed { index, chat ->
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(chat.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
                             Text(chat.content, style = MaterialTheme.typography.bodyMedium)
-                            Text("${chat.protocol.uppercase()} · ${chat.via} · ${chat.timestamp}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                stringResource(R.string.chat_meta, chat.protocol.uppercase(), chat.via, chat.timestamp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
-                        if (index != chats.lastIndex && index < 9) {
+                        if (index != chats.lastIndex) {
                             HorizontalDivider()
                         }
                     }

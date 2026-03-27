@@ -46,7 +46,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.focus.focusable
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.ViewModel
@@ -223,6 +224,7 @@ class MessengerViewModel(
                     timestamp = displayTime,
                 )
             }
+            .toList()
     }
 
     companion object {
@@ -248,23 +250,39 @@ class MessengerViewModel(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MessengerScreen(viewModel: MessengerViewModel = viewModel(factory = MessengerViewModel.factory())) {
+fun MessengerScreen(
+    // Initialisierung erfolgt hier als Default-Parameter, was in dieser Form
+    // vom Compiler innerhalb der @Composable-Funktion akzeptiert wird.
+    viewModel: MessengerViewModel = viewModel(factory = MessengerViewModel.factory())
+) {
+    // State-Beobachtung
     val uiState by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
-    val coroutineScope = rememberCoroutineScope()
 
+    // --- STRINGS VORAB EXTRAHIEREN (Wichtig für Modifier-Blocks) ---
+    val screenDesc = stringResource(R.string.screen_message_list_desc)
+    val titleMatrix = stringResource(R.string.title_matrix_first)
+    val subtitleModern = stringResource(R.string.subtitle_modern_dark)
+    // ---------------------------------------------------------------
+
+    // Status-Meldungen via Snackbar anzeigen
     uiState.status?.let { status ->
         LaunchedEffect(status) {
-            coroutineScope.launch {
-                snackbarHostState.showSnackbar(status)
-            }
+            snackbarHostState.showSnackbar(status)
         }
     }
 
     Scaffold(
-        modifier = Modifier.semantics { contentDescription = stringResource(R.string.screen_message_list_desc) },
-        topBar = { TopAppBar(title = { Text("SecureRCS Messenger") }) },
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+        modifier = Modifier.semantics {
+            // Nutzung der vorab extrahierten Variable
+            contentDescription = screenDesc
+        },
+        topBar = {
+            TopAppBar(title = { Text("SecureRCS Messenger") })
+        },
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState)
+        },
     ) { padding ->
         LazyColumn(
             modifier = Modifier
@@ -276,32 +294,45 @@ fun MessengerScreen(viewModel: MessengerViewModel = viewModel(factory = Messenge
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        text = stringResource(R.string.title_matrix_first),
+                        text = titleMatrix,
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        text = stringResource(R.string.subtitle_modern_dark),
+                        text = subtitleModern,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
+
             item { ContactsCard(contacts = uiState.contacts) }
+
             item { RecentChatsCard(chats = uiState.recentChats) }
-            item { PendingWarningsCard(pending = uiState.pendingWarnings, onAcknowledge = viewModel::acknowledgeAndRetry) }
+
+            item {
+                PendingWarningsCard(
+                    pending = uiState.pendingWarnings,
+                    onAcknowledge = viewModel::acknowledgeAndRetry
+                )
+            }
+
             item {
                 SendMessageCard(
                     services = uiState.services,
                     onSend = viewModel::sendMessage,
                 )
             }
+
             item { HistoryCard(title = "Outbox", messages = uiState.outbox) }
+
             item { HistoryCard(title = "Inbox", messages = uiState.inbox) }
+
             item { AuditCard(entries = uiState.audit) }
         }
     }
 
+    // Risiko-Dialog anzeigen, falls vorhanden
     uiState.pendingRisk?.let { risk ->
         RiskDialog(
             risk = risk,
@@ -313,19 +344,35 @@ fun MessengerScreen(viewModel: MessengerViewModel = viewModel(factory = Messenge
 
 @Composable
 fun ContactsCard(contacts: List<Contact>) {
+    // 1. Strings vorab extrahieren, da semantics { } kein Composable-Kontext ist
+    val labelContacts = stringResource(R.string.label_contacts)
+    val contactsEmpty = stringResource(R.string.contacts_empty)
+    val scrollHint = stringResource(R.string.contacts_scroll_hint)
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(stringResource(R.string.label_contacts), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = labelContacts,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+
             if (contacts.isEmpty()) {
-                Text(stringResource(R.string.contacts_empty))
+                Text(text = contactsEmpty)
             } else {
                 Row(
                     modifier = Modifier
                         .horizontalScroll(rememberScrollState())
-                        .semantics { contentDescription = stringResource(R.string.contacts_scroll_hint) },
+                        .semantics {
+                            // 2. Hier die Variable nutzen statt stringResource()
+                            contentDescription = scrollHint
+                        },
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     contacts.forEach { contact ->
@@ -336,6 +383,7 @@ fun ContactsCard(contacts: List<Contact>) {
         }
     }
 }
+
 
 @Composable
 fun ContactCard(contact: Contact) {
@@ -397,7 +445,7 @@ fun PendingWarningsCard(
             } else {
                 pending.forEach { (service, warning) ->
                     WarningRow(service = service, warning = warning, onAcknowledge = onAcknowledge)
-                    Divider()
+
                 }
             }
         }
@@ -518,7 +566,7 @@ fun HistoryCard(title: String, messages: List<StoredMessage>) {
                             Text(msg.content, style = MaterialTheme.typography.bodyMedium)
                             Text(msg.timestamp, style = MaterialTheme.typography.bodySmall)
                         }
-                        Divider()
+
                     }
                 }
             }
@@ -536,7 +584,7 @@ fun AuditCard(entries: List<String>) {
             } else {
                 entries.forEach { entry ->
                     Text(entry, style = MaterialTheme.typography.bodyMedium)
-                    Divider()
+
                 }
             }
         }

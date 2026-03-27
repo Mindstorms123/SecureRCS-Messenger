@@ -5,7 +5,7 @@ Privacy-first messenger that keeps all processing local, bridges Matrix/RCS and 
 ## What is provided?
 
 - **Lokaler Dienst**: Keine externen Aufrufe – Nachrichten, Protokolle und Warnungen verbleiben lokal.
-- **Matrix- und RCS-Basis**: Dedizierte Connectoren plus generische Third-Party-Connectoren, um weitere Dienste lokal einzubinden.
+- **Matrix- und RCS-Basis**: Dedizierte Connectoren plus generische Third-Party-Connectoren, um weitere Dienste lokal einzubinden (E-Mail, Discord, Slack, Telegram, WhatsApp – alles lokal simuliert).
 - **Risikohinweise**: Vor der Nutzung eines Dienstes muss der Nutzer die hinterlegten Risiken bestätigen (z. B. fehlende E2EE bei SMS/RCS, Metadatenabfluss bei proprietären Netzen).
 - **Bridging**: Nachrichten können von einem Dienst an andere weitergereicht werden (z. B. Matrix → RCS/WhatsApp), solange der Nutzer die Risiken bestätigt hat.
 
@@ -22,7 +22,7 @@ Die Demo:
 
 - zeigt alle bekannten Risiken,
 - erzwingt eine Bestätigung bevor eine riskante Verbindung (z. B. WhatsApp) genutzt wird,
-- sendet eine Matrix-Nachricht über die eingerichteten Bridges und protokolliert alles lokal.
+- sendet eine Matrix-Nachricht über die eingerichteten Bridges (RCS, E-Mail, Discord, Slack, Telegram, WhatsApp) und protokolliert alles lokal.
 
 Die komplette Historie (Inbox/Outbox/Audit) wird am Ende der Demo ausgegeben und verbleibt ausschließlich auf dem lokalen System.
 

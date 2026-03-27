@@ -72,6 +72,10 @@ class RiskRegistry:
         "matrix federation": "Federated homeservers can observe metadata; trust only servers you control.",
         "whatsapp": "Proprietary network; metadata and backups may be accessible to the provider.",
         "facebook messenger": "Proprietary network; metadata can be profiled.",
+        "email": "Email transport is typically only hop-to-hop encrypted; providers can read content.",
+        "discord": "Discord stores messages server-side; there is no end-to-end encryption.",
+        "slack": "Slack workspaces are processed server-side; workspace owners may access content.",
+        "telegram": "Regular Telegram chats lack end-to-end encryption; metadata is held by the provider.",
     }
 
     def __init__(self, custom_risks: Optional[Dict[str, str]] = None) -> None:
@@ -218,8 +222,18 @@ def demo() -> None:
     messenger.add_connector(MatrixConnector(store))
     messenger.add_connector(RCSConnector(store))
     messenger.add_connector(ThirdPartyConnector("whatsapp", store))
+    messenger.add_connector(ThirdPartyConnector("email", store))
+    messenger.add_connector(ThirdPartyConnector("discord", store))
+    messenger.add_connector(ThirdPartyConnector("slack", store))
+    messenger.add_connector(ThirdPartyConnector("telegram", store))
 
-    messenger.connect_services("matrix", ["rcs", "whatsapp"])
+    messenger.connect_services("matrix", ["rcs", "whatsapp", "email", "discord", "slack", "telegram"])
+    messenger.connect_services("rcs", ["matrix"])
+    messenger.connect_services("whatsapp", ["matrix"])
+    messenger.connect_services("email", ["matrix"])
+    messenger.connect_services("discord", ["matrix"])
+    messenger.connect_services("slack", ["matrix"])
+    messenger.connect_services("telegram", ["matrix"])
 
     print("Known service risks:")
     for service, warning in registry.describe().items():
@@ -232,9 +246,14 @@ def demo() -> None:
         messenger.acknowledge_service(exc.service)
         messenger.send_message("whatsapp", sender="alice", recipient="bob", content="Hi Bob from Matrix bridge (acknowledged)")
 
-    messenger.acknowledge_service("matrix")
-    messenger.acknowledge_service("rcs")
-    messenger.send_message("matrix", sender="alice", recipient="carol", content="Routing via Matrix with bridge")
+    for svc in ["matrix", "rcs", "email", "discord", "slack", "telegram"]:
+        messenger.acknowledge_service(svc)
+    messenger.send_message(
+        "matrix",
+        sender="alice",
+        recipient="carol",
+        content="Routing via Matrix with bridge to all connectors",
+    )
 
     print("\nLocal-only audit and history:")
     for entry in messenger.history()["audit"]:
